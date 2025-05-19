@@ -50,7 +50,16 @@ public class PlayerServiceImpl implements PlayerService {
         //  Como resultado del guardado debe retornar el usuario nuevamente con el balance actualizado.
         //  Es decir que...->  nuevoBalance = actualBalance + balanceChipsImpact
 
-         return null;
+        PlayerEntity playerEntity = playerJpaRepository.getReferenceById(playerId);
+        if(Objects.isNull(playerEntity.getUserName())) {
+            throw new EntityNotFoundException(String.format("The player id %s do not exist", playerId));
+        }
+
+        BigDecimal newBalance = playerEntity.getBalanceChips().add(balanceChipsImpact);
+        playerEntity.setBalanceChips(newBalance);
+        playerJpaRepository.save(playerEntity);
+        return modelMapper.map(playerEntity, Player.class);
+
     }
 
     @Override
@@ -62,7 +71,20 @@ public class PlayerServiceImpl implements PlayerService {
         //  Ayuda: Usar el metodo userAvailable()
         if(userAvailable(newPlayerRequestDTO.getEmail(), newPlayerRequestDTO.getUserName())) {
             PlayerEntity playerEntity = new PlayerEntity();
-            // TODO: Completar aquí
+
+            //TODO validar que el email sea de formato valido
+
+            if (!newPlayerRequestDTO.getEmail().matches("^[\\w-\\.]+@([\\w-]+\\.)+[\\w-]{2,4}$")) {
+                throw new IllegalArgumentException("The email format it's not valid");
+            }
+
+
+            playerEntity.setEmail(newPlayerRequestDTO.getEmail());
+            playerEntity.setUserName(newPlayerRequestDTO.getUserName());
+            playerEntity.setBalanceChips(INITIAL_BALANCE);
+            playerEntity.setAvatar(DEFAULT_AVATAR);
+            playerEntity.setPassword(newPlayerRequestDTO.getPassword());
+
             return modelMapper.map(playerEntity, PlayerResponseDTO.class);
         } else {
             throw new IllegalArgumentException("The user_name or email already exists");
@@ -73,6 +95,6 @@ public class PlayerServiceImpl implements PlayerService {
         // TODO: Implementar el método de manera tal que valide contra la base de datos que no exista un jugador
         //  con el email o el userName recibidos por paarmetros
 
-        return null;
+        return playerJpaRepository.findByUserNameOrEmail(email, userName).isEmpty();
     }
 }

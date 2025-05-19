@@ -54,7 +54,14 @@ public class MatchServiceImpl implements MatchService {
         List<MatchResponseDTO> matches = new ArrayList<>();
         Optional<List<MatchEntity>> matchEntityList = matchJpaRepository.getAllByPlayerIdAndMatchStatus(playerId, MatchStatus.FINISH);
         if(matchEntityList.isPresent()) {
+
             // TODO: Recorrer la lista y mapear el objeto
+
+            matchEntityList.get().forEach(matchEntity -> {
+                MatchResponseDTO matchResponseDTO = modelMapper.map(matchEntity, MatchResponseDTO.class);
+                matches.add(matchResponseDTO);
+            });
+
             return matches;
         } else {
             throw new EntityNotFoundException("The player do not have matches finished");
@@ -113,10 +120,21 @@ public class MatchServiceImpl implements MatchService {
         //  5.e. Calcular el estado de la mano de cada jugador (Round.roundHandStatusPlayer y Round.roundHandStatusApp)
         //  5.f. Asignar las fichas en juego (Round.chipsInPlay)
 
+
+
         // 1
         Match match = this.getMatchById(matchId);
 
+        if (match == null) {
+            throw new EntityNotFoundException(String.format("The match id %s not found", matchId));
+        }
+
         // 2
+
+        if(!match.getPlayer().getId().equals(newMatchRoundRequestDTO.getPlayerId())) {
+            throw new IllegalArgumentException(
+                    String.format("The match id %s does not belong to player %s", matchId, newMatchRoundRequestDTO.getPlayerId()));
+        }
 
         // 3
         List<Round> roundsUnfinished = roundService.getUnfinishedRounds(matchId);
@@ -126,12 +144,25 @@ public class MatchServiceImpl implements MatchService {
 
         // 4
 
+        if(match.getPlayer().getBalanceChips().compareTo(CHIPS_PER_ROUND) < 0) {
+            throw new ResponseStatusException(HttpStatusCode.valueOf(403), "Insufficient balance");
+        }
+
         // 5 ------INICIO--------
         Round round = new Round();
         round.setMatchId(matchId);
         // 5.a
 
+        Deck deck = deckService.createDeck();
+        deckService.shuffleDeck(deck);
+
         // 5.b
+        round.setDeck(deck);
+        round.setPlayerCards(new ArrayList<>());
+        round.getPlayerCards().add(deckService.takeCard(deck, 0));
+        round.setAppCards(new ArrayList<>());
+        round.getAppCards().add(deckService.takeCard(deck, 1));
+
 
         // 5.c
         round.setDeckIndexPosition(2);
@@ -142,8 +173,12 @@ public class MatchServiceImpl implements MatchService {
 
         // 5.e
 
+        round.setRoundHandStatusPlayer(calculateRoundHand(round.getPlayerCardsValue()));
+        round.setRoundHandStatusApp(calculateAppHand(round.getAppCardsValue()));
+
         // 5.f
 
+        round.setChipsInPlay(CHIPS_PER_ROUND);
         // 5 -------FIN-------
         round = roundService.saveRound(round);
         return modelMapper.map(round, RoundResponseDTO.class);
@@ -185,6 +220,11 @@ public class MatchServiceImpl implements MatchService {
 
         // 3
 
+        if(!match.getPlayer().getId().equals(round.getMatchId())) {
+            throw new IllegalArgumentException(
+                    String.format("The match id %s does not belong to player %s", matchId, round.getMatchId()));
+        }
+
         // 4
         if(!match.getRounds().contains(round)) {
             throw new IllegalArgumentException(
@@ -192,6 +232,10 @@ public class MatchServiceImpl implements MatchService {
         }
 
         // 5
+
+        if(round.getWinner() != null || round.getRoundHandStatusPlayer().equals(RoundHandStatus.STOPPED)) {
+            throw new ResponseStatusException(HttpStatusCode.valueOf(403), "Round is end");
+        }
 
         // 6
         if(roundPlayDTO.getDecision().equals(RoundDecision.STOP)) {
@@ -212,7 +256,18 @@ public class MatchServiceImpl implements MatchService {
         //TODO: Implementar el metodo para que retorne, si existe, el match que esté en estado PLAYING.
         // Si existieran mas de uno, (Situación que no debiera ser posible) retornar el primero
 
-        return Optional.empty();
+        Optional<List<MatchEntity>> matchEntityList = matchJpaRepository.getAllByPlayerIdAndMatchStatus(playerId, MatchStatus.PLAYING);
+
+        if(matchEntityList.isPresent()) {
+            List<Match> matches = new ArrayList<>();
+            matchEntityList.get().forEach(matchEntity -> {
+                Match match = modelMapper.map(matchEntity, Match.class);
+                matches.add(match);
+            });
+            return Optional.of(matches.get(0));
+        } else {
+            return Optional.empty();
+        }
     }
 
     @Override
@@ -240,6 +295,15 @@ public class MatchServiceImpl implements MatchService {
 
             // 4 - Calcular el estado del round para la app -> Ayuda: calculateAppHand
 
+            //1
+            round.getAppCards().add(deckService.takeCard(round.getDeck(), round.getDeckIndexPosition()));
+            //2
+            round.setDeckIndexPosition(round.getDeckIndexPosition() + 1);
+            //3
+            round.setAppCardsValue(getCardsValue(round.getAppCards()));
+            //4
+            round.setRoundHandStatusApp(calculateAppHand(round.getAppCardsValue()));
+
         }
         calculateWinner(round, playerId);
     }
@@ -251,26 +315,38 @@ public class MatchServiceImpl implements MatchService {
             } else {
                 round.setWinner(RoundWinner.APP);
                 // TODO: Descontar la apuesta del player del balance usando playerService.updatePlayerBalance
+
+                playerService.updatePlayerBalance(playerId, round.getChipsInPlay().negate());
             }
         } else {
             if(round.getRoundHandStatusApp().equals(RoundHandStatus.EXCEEDED)) {
                 round.setWinner(RoundWinner.PLAYER);
                 if(round.getPlayerCardsValue().compareTo(CARDS_LIMIT) == 0) {
                     // TODO: Sumar la apuesta del player * 2 al balance usando playerService.updatePlayerBalance
+
+                    playerService.updatePlayerBalance(playerId, round.getChipsInPlay().multiply(BigDecimal.valueOf(2)));
+
                 } else {
                     // TODO: Sumar la apuesta del player al balance usando playerService.updatePlayerBalance
+
+                    playerService.updatePlayerBalance(playerId, round.getChipsInPlay());
                 }
             } else {
                 if(round.getPlayerCardsValue().compareTo(round.getAppCardsValue()) > 0) {
                     round.setWinner(RoundWinner.PLAYER);
                     if(round.getPlayerCardsValue().compareTo(CARDS_LIMIT) == 0) {
                         // TODO: Sumar la apuesta del player * 2 al balance usando playerService.updatePlayerBalance
+
+                        playerService.updatePlayerBalance(playerId, round.getChipsInPlay().multiply(BigDecimal.valueOf(2)));
                     } else {
                         // TODO: Sumar la apuesta del player al balance usando playerService.updatePlayerBalance
+
+                        playerService.updatePlayerBalance(playerId, round.getChipsInPlay());
                     }
                 } else {
                     round.setWinner(RoundWinner.APP);
                     // TODO: Descontar la apuesta del player del balance usando playerService.updatePlayerBalance
+                    playerService.updatePlayerBalance(playerId, round.getChipsInPlay().negate());
                 }
             }
         }
@@ -289,12 +365,22 @@ public class MatchServiceImpl implements MatchService {
         //  - El Match debe tener el estado PLAYING
         //  - Guardar el Match y retornar la respuesta mapeada a Match
 
-        return null;
+        Match match = new Match();
+        match.setPlayer(player);
+        match.setMatchStatus(MatchStatus.PLAYING);
+        MatchEntity matchEntity = matchJpaRepository.save(modelMapper.map(match, MatchEntity.class));
+        return modelMapper.map(matchEntity, Match.class);
+
     }
 
     private Optional<Round> hasUnfinishedRound(Match match) {
         // TODO: Implementar el metódo de manera tal que si hay un round sin terminar (winner == null),
         //  lo retorne en un Optional, sino, el Optional se retorna vacio.
+
+        List<Round> rounds = roundService.getUnfinishedRounds(match.getId());
+        if(rounds != null && !rounds.isEmpty()) {
+            return Optional.of(rounds.get(0));
+        }
 
         return Optional.empty();
     }
@@ -302,19 +388,38 @@ public class MatchServiceImpl implements MatchService {
     private BigDecimal getCardsValue(List<Card> cardsToSummarize) {
         // TODO: Sumar los valores de todas las cartas recibidas por parametro y retornar el valor de la sumarización
 
-        return null;
+        BigDecimal cardsValue = BigDecimal.ZERO;
+        for(Card card : cardsToSummarize) {
+            cardsValue = cardsValue.add(card.getValue());
+        }
+        return cardsValue;
+
+
     }
 
     private RoundHandStatus calculateRoundHand(BigDecimal cardsValue) {
         // TODO: Retornar RoundHandStatus.EXCEEDED si excede de 7.5, de lo contrario retornar RoundHandStatus.IN_GAME
 
-        return null;
+
+        if(cardsValue.compareTo(CARDS_LIMIT) > 0) {
+            return RoundHandStatus.EXCEEDED;
+        }
+
+
+
+        return RoundHandStatus.IN_GAME;
     }
 
     private RoundHandStatus calculateAppHand(BigDecimal cardsValue) {
         // TODO: Retornar RoundHandStatus.EXCEEDED si excede de 7.5 o RoundHandStatus.STOPPED si excede 5
         //  de lo contrario retornar RoundHandStatus.IN_GAME
 
-        return null;
+        if(cardsValue.compareTo(CARDS_LIMIT) > 0) {
+            return RoundHandStatus.EXCEEDED;
+        } else if(cardsValue.compareTo(APP_THRESHOLD) > 0) {
+            return RoundHandStatus.STOPPED;
+        }
+
+        return RoundHandStatus.IN_GAME;
     }
 }

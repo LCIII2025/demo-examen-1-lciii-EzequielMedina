@@ -32,6 +32,18 @@ public class DeckServiceImpl implements DeckService {
     @Override
     public void shuffleDeck(Deck deck) {
         //TODO: Tomar el mazo (deck) que viene como parametro y mesclar las cartas
+        //TODO usando el algoritmo de Fisher-Yates
+
+        for ( int i = deck.getCards().size() - 1; i > 0; i-- ){
+            int j = (int) (Math.random() * (i + 1));
+            Card temp = deck.getCards().get(i);
+            deck.getCards().set(i, deck.getCards().get(j));
+            deck.getCards().set(j, temp);
+        }
+
+
+
+
     }
 
     @Override
